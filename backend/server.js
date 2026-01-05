@@ -15,18 +15,21 @@ let pool;
 if (process.env.DATABASE_URL) {
   pool = new Pool({
     connectionString: process.env.DATABASE_URL,
-    ssl: { rejectUnauthorized: false }
+    ssl: { rejectUnauthorized: false },
+    max: 5,
+    idleTimeoutMillis: 30000,
+    connectionTimeoutMillis: 10000
   });
 
-  // Test DB connection
-  pool.connect((err) => {
-    if (err) {
-      console.error('Database connection error:', err.message);
-      console.log('Continuing without database connection...');
-    } else {
-      console.log('Connected to Neon PostgreSQL');
-    }
+  // Handle pool errors gracefully
+  pool.on('error', (err) => {
+    console.error('Unexpected database pool error:', err.message);
   });
+
+  // Test connection without keeping client checked out
+  pool.query('SELECT NOW()')
+    .then(() => console.log('Connected to Neon PostgreSQL'))
+    .catch((err) => console.error('Database connection error:', err.message));
 } else {
   console.log('No DATABASE_URL provided, running without database');
 }
