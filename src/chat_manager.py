@@ -7,8 +7,12 @@ Handles sending and receiving chat messages across streaming platforms.
 import socket
 import threading
 import requests
+import time
 from typing import List, Dict, Optional, Callable
-from config import BACKEND_URL, TWITCH_ACCESS_TOKEN, TWITCH_CHANNEL_ID
+from config import (
+    BACKEND_URL, TWITCH_ACCESS_TOKEN, TWITCH_CHANNEL_ID,
+    YOUTUBE_ACCESS_TOKEN, YOUTUBE_CHANNEL_ID
+)
 
 
 class TwitchIRC:
@@ -137,6 +141,145 @@ class TwitchIRC:
                 pass
 
 
+class YouTubeLiveChat:
+    """YouTube Live Chat API client."""
+
+    BASE_URL = "https://www.googleapis.com/youtube/v3"
+
+    def __init__(self, access_token: str, channel_id: str,
+                 on_message: Callable[[str, str, str], None] = None):
+        """Initialize YouTube Live Chat client.
+
+        Args:
+            access_token: OAuth token for authentication
+            channel_id: YouTube channel ID
+            on_message: Callback for received messages (username, message, channel)
+        """
+        self.access_token = access_token
+        self.channel_id = channel_id
+        self.on_message = on_message
+        self._running = False
+        self._thread: Optional[threading.Thread] = None
+        self._live_chat_id: Optional[str] = None
+        self._next_page_token: Optional[str] = None
+        self.connected = False
+
+    def connect(self) -> bool:
+        """Connect to YouTube Live Chat by finding active broadcast."""
+        if not self.access_token or not self.channel_id:
+            print("YouTube Chat: Missing access token or channel ID")
+            return False
+
+        # Find active live broadcast
+        self._live_chat_id = self._get_live_chat_id()
+        if not self._live_chat_id:
+            print("YouTube Chat: No active live broadcast found")
+            return False
+
+        self._running = True
+        self.connected = True
+        self._thread = threading.Thread(target=self._poll_messages, daemon=True)
+        self._thread.start()
+
+        print(f"YouTube Chat: Connected to live chat")
+        return True
+
+    def disconnect(self):
+        """Disconnect from YouTube Live Chat."""
+        self._running = False
+        self.connected = False
+        self._live_chat_id = None
+
+    def send_message(self, message: str) -> bool:
+        """Send a message to YouTube Live Chat."""
+        if not self.connected or not self._live_chat_id:
+            return False
+
+        try:
+            response = requests.post(
+                f"{self.BASE_URL}/liveChat/messages",
+                params={"part": "snippet"},
+                headers={"Authorization": f"Bearer {self.access_token}"},
+                json={
+                    "snippet": {
+                        "liveChatId": self._live_chat_id,
+                        "type": "textMessageEvent",
+                        "textMessageDetails": {"messageText": message}
+                    }
+                },
+                timeout=10
+            )
+            response.raise_for_status()
+            return True
+        except Exception as e:
+            print(f"YouTube Chat: Failed to send - {e}")
+            return False
+
+    def _get_live_chat_id(self) -> Optional[str]:
+        """Get the live chat ID for the active broadcast."""
+        try:
+            # First, find the active live broadcast
+            response = requests.get(
+                f"{self.BASE_URL}/liveBroadcasts",
+                params={
+                    "part": "snippet",
+                    "broadcastStatus": "active",
+                    "broadcastType": "all"
+                },
+                headers={"Authorization": f"Bearer {self.access_token}"},
+                timeout=10
+            )
+            response.raise_for_status()
+            items = response.json().get("items", [])
+
+            if items:
+                return items[0]["snippet"].get("liveChatId")
+            return None
+        except Exception as e:
+            print(f"YouTube Chat: Failed to get live chat ID - {e}")
+            return None
+
+    def _poll_messages(self):
+        """Poll for new messages in a background thread."""
+        poll_interval = 5  # seconds
+
+        while self._running and self._live_chat_id:
+            try:
+                params = {
+                    "liveChatId": self._live_chat_id,
+                    "part": "snippet,authorDetails"
+                }
+                if self._next_page_token:
+                    params["pageToken"] = self._next_page_token
+
+                response = requests.get(
+                    f"{self.BASE_URL}/liveChat/messages",
+                    params=params,
+                    headers={"Authorization": f"Bearer {self.access_token}"},
+                    timeout=10
+                )
+                response.raise_for_status()
+                data = response.json()
+
+                self._next_page_token = data.get("nextPageToken")
+                poll_interval = data.get("pollingIntervalMillis", 5000) / 1000
+
+                for item in data.get("items", []):
+                    snippet = item.get("snippet", {})
+                    author = item.get("authorDetails", {})
+
+                    if snippet.get("type") == "textMessageEvent":
+                        username = author.get("displayName", "Unknown")
+                        message = snippet.get("textMessageDetails", {}).get("messageText", "")
+                        if self.on_message and message:
+                            self.on_message(username, message, self.channel_id)
+
+            except Exception as e:
+                print(f"YouTube Chat: Poll error - {e}")
+
+            time.sleep(poll_interval)
+
+
 class ChatManager:
     """Manages chat connections and messages for multiple platforms."""
 
@@ -184,6 +327,32 @@ class ChatManager:
         irc = TwitchIRC(token, chan, on_message=on_twitch_message)
         if irc.connect():
             self.connections["twitch"] = irc
+            return True
+        return False
+
+    def connect_youtube(self, access_token: str = None, channel_id: str = None) -> bool:
+        """Connect to YouTube Live Chat.
+
+        Args:
+            access_token: OAuth token (uses config if not provided)
+            channel_id: Channel ID (uses config if not provided)
+
+        Returns:
+            True if connected successfully
+        """
+        token = access_token or YOUTUBE_ACCESS_TOKEN
+        chan = channel_id or YOUTUBE_CHANNEL_ID
+
+        if not token or not chan:
+            print("YouTube chat: Missing credentials")
+            return False
+
+        def on_youtube_message(username: str, message: str, channel: str):
+            self._notify_message("youtube", username, message, channel)
+
+        chat = YouTubeLiveChat(token, chan, on_message=on_youtube_message)
+        if chat.connect():
+            self.connections["youtube"] = chat
             return True
         return False
 
@@ -244,9 +413,7 @@ class ChatManager:
         if platform == "twitch":
             return self.connect_twitch()
         elif platform == "youtube":
-            # YouTube chat will be implemented in task 6
-            print("YouTube chat: Not yet implemented")
-            return False
+            return self.connect_youtube()
         elif platform == "kick":
             # Kick chat will be implemented in task 7
             print("Kick chat: Not yet implemented")
@@ -270,6 +437,8 @@ class ChatManager:
             return False
 
         if platform.lower() == "twitch" and isinstance(conn, TwitchIRC):
+            return conn.send_message(message)
+        elif platform.lower() == "youtube" and isinstance(conn, YouTubeLiveChat):
             return conn.send_message(message)
 
         return False
