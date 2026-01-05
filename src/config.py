@@ -5,7 +5,7 @@ Configuration module for Multi-Stream Operations
 import os
 
 # Backend API settings
-BACKEND_URL = os.getenv("BACKEND_URL", "https://your-render-app.onrender.com")  # Update with actual Render URL
+BACKEND_URL = os.getenv("BACKEND_URL", "https://multi-stream-backend.onrender.com")  # Update with actual Render URL
 
 # OBS WebSocket settings
 OBS_HOST = "localhost"
