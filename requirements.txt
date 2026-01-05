@@ -1,4 +1,7 @@
-obs-websocket-py
-requests
-tkinter
-# Add other dependencies as needed
+# Core dependencies
+requests>=2.31.0
+obs-websocket-py>=1.0
+
+# Optional platform integrations
+# twitchio>=2.6.0      # For Twitch chat
+# google-api-python-client>=2.100.0  # For YouTube API

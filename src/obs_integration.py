@@ -1,29 +1,84 @@
 """
-OBS Integration module using WebSocket
+OBS Integration module using WebSocket.
+
+Provides control over OBS Studio for multi-platform streaming.
 """
 
-import asyncio
-from obswebsocket import obsws
+try:
+    from obswebsocket import obsws, requests as obs_requests
+    OBS_AVAILABLE = True
+except ImportError:
+    OBS_AVAILABLE = False
+
 
 class OBSController:
-    def __init__(self, host, port, password):
+    """Controller for OBS Studio WebSocket integration."""
+
+    def __init__(self, host: str, port: int, password: str):
         self.host = host
         self.port = port
         self.password = password
         self.ws = None
+        self.connected = False
 
-    async def connect(self):
-        self.ws = obswebsocket.ReqClient(host=self.host, port=self.port, password=self.password)
-        # TODO: Handle connection
+    def connect(self) -> bool:
+        """Connect to OBS WebSocket server."""
+        if not OBS_AVAILABLE:
+            print("OBS WebSocket library not available")
+            return False
 
-    async def start_streaming(self):
-        # TODO: Implement start streaming to multiple platforms
-        pass
+        try:
+            self.ws = obsws(self.host, self.port, self.password)
+            self.ws.connect()
+            self.connected = True
+            print("Connected to OBS")
+            return True
+        except Exception as e:
+            print(f"Failed to connect to OBS: {e}")
+            self.connected = False
+            return False
 
-    async def stop_streaming(self):
-        # TODO: Implement stop streaming
-        pass
+    def disconnect(self):
+        """Disconnect from OBS WebSocket server."""
+        if self.ws and self.connected:
+            try:
+                self.ws.disconnect()
+            except Exception:
+                pass
+            self.connected = False
 
-    async def get_stream_status(self):
-        # TODO: Get current stream status
-        pass
+    def start_streaming(self) -> bool:
+        """Start streaming in OBS."""
+        if not self.connected:
+            return False
+        try:
+            self.ws.call(obs_requests.StartStreaming())
+            return True
+        except Exception as e:
+            print(f"Failed to start streaming: {e}")
+            return False
+
+    def stop_streaming(self) -> bool:
+        """Stop streaming in OBS."""
+        if not self.connected:
+            return False
+        try:
+            self.ws.call(obs_requests.StopStreaming())
+            return True
+        except Exception as e:
+            print(f"Failed to stop streaming: {e}")
+            return False
+
+    def get_stream_status(self) -> dict:
+        """Get current streaming status from OBS."""
+        if not self.connected:
+            return {"streaming": False, "recording": False}
+        try:
+            status = self.ws.call(obs_requests.GetStreamingStatus())
+            return {
+                "streaming": status.getStreaming(),
+                "recording": status.getRecording()
+            }
+        except Exception as e:
+            print(f"Failed to get stream status: {e}")
+            return {"streaming": False, "recording": False}

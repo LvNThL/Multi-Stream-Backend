@@ -1,30 +1,31 @@
-<!-- Use this file to provide workspace-specific custom instructions to Copilot. For more details, visit https://code.visualstudio.com/docs/copilot/copilot-customization#_use-a-githubcopilotinstructionsmd-file -->
-- [x] Verify that the copilot-instructions.md file in the .github directory is created. File created successfully.
+# Multi-Stream Operations - Development Guidelines
 
-- [x] Clarify Project Requirements
-	Project requirements clarified: Python-based desktop application for multi-streaming.
+## Project Overview
+Python desktop application for multi-streaming to Kick, Twitch, and YouTube using OBS Studio.
 
-- [ ] Scaffold the Project
-	Project scaffolded with src/, tests/, docs/ directories, main.py, requirements.txt, README.md, .gitignore.
+## Architecture
+- **Frontend**: Tkinter GUI (`src/gui.py`)
+- **Backend**: Node.js/Express API on Render (`backend/`)
+- **Database**: Neon PostgreSQL
 
-- [x] Customize the Project
-	Codebase customized with modular components for OBS integration, platform APIs, metrics aggregation, chat management, and GUI.
+## Code Standards
+- Use type hints for function parameters and returns
+- Include docstrings for all classes and public methods
+- Follow PEP 8 style guidelines
+- Keep functions focused and under 50 lines
 
-- [x] Install Required Extensions
-	No extensions needed.
+## Key Components
+- `config.py` - Environment configuration
+- `gui.py` - Main application interface
+- `obs_integration.py` - OBS WebSocket control
+- `platform_apis.py` - Twitch/YouTube/Kick integrations
+- `metrics_aggregator.py` - Unified metrics collection
+- `chat_manager.py` - Multi-platform chat handling
 
-- [ ] Compile the Project
-	Dependencies installed, tests passed.
+## Testing
+- Run tests with `pytest tests/`
+- Add tests for new features in `tests/` directory
 
-- [ ] Create and Run Task
-	Task created and run successfully.
-
-- [ ] Launch the Project
-	Project launched successfully.
-
-- [ ] Ensure Documentation is Complete
-	README.md exists and is up to date. HTML comments removed from copilot-instructions.md.
-
-- Work through each checklist item systematically.
-- Keep communication concise and focused.
-- Follow development best practices.
+## Deployment
+- Backend: https://multi-stream-backend.onrender.com
+- Database: Neon PostgreSQL (connection in Render env vars)
