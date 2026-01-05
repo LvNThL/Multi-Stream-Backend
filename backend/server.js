@@ -75,6 +75,6 @@ app.get('/chat/messages', async (req, res) => {
 });
 
 // Start server
-app.listen(port, () => {
+app.listen(port, '0.0.0.0', () => {
   console.log(`Backend server running on port ${port}`);
 });
