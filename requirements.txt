@@ -1,0 +1,4 @@
+obs-websocket-py
+requests
+tkinter
+# Add other dependencies as needed

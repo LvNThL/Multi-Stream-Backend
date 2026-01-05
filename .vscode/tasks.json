@@ -1,0 +1,12 @@
+{
+	"version": "2.0.0",
+	"tasks": [
+		{
+			"label": "Run Multi-Stream App",
+			"type": "shell",
+			"command": "python src/main.py",
+			"isBackground": false,
+			"group": "build"
+		}
+	]
+}
