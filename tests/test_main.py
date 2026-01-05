@@ -51,9 +51,7 @@ class TestMetricsAggregator:
     def test_aggregator_init(self):
         from metrics_aggregator import MetricsAggregator
         aggregator = MetricsAggregator()
-        assert aggregator.twitch is not None
-        assert aggregator.youtube is not None
-        assert aggregator.kick is not None
+        assert aggregator.backend_url is not None
 
     def test_get_all_metrics(self):
         from metrics_aggregator import MetricsAggregator
@@ -63,6 +61,24 @@ class TestMetricsAggregator:
         assert "followers" in metrics
         assert "subscribers" in metrics
         assert "donations" in metrics
+        assert "platforms" in metrics
+
+
+class TestPlatformRegistry:
+    """Tests for platform registry system."""
+
+    def test_registry_lists_platforms(self):
+        from platform_apis import PlatformRegistry
+        platforms = PlatformRegistry.list_available()
+        assert "twitch" in platforms
+        assert "youtube" in platforms
+        assert "kick" in platforms
+
+    def test_registry_get_platform(self):
+        from platform_apis import PlatformRegistry
+        twitch = PlatformRegistry.get("twitch")
+        assert twitch is not None
+        assert twitch.PLATFORM_NAME == "twitch"
 
 
 class TestChatManager:

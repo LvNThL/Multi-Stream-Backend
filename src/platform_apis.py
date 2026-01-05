@@ -1,20 +1,50 @@
 """
 Platform APIs module for streaming platform integrations.
 
-Provides unified interfaces for Twitch, YouTube, and Kick APIs.
+Provides unified interfaces for Twitch, YouTube, Kick APIs,
+with a registry system to easily add new platforms.
 """
 
 import requests
-from typing import Optional
+from typing import Optional, Dict, Type, List
+from dataclasses import dataclass
 from config import (
     TWITCH_CLIENT_ID, TWITCH_ACCESS_TOKEN, TWITCH_CHANNEL_ID,
-    YOUTUBE_API_KEY, YOUTUBE_CHANNEL_ID,
-    KICK_USERNAME
+    TWITCH_STREAM_KEY,
+    YOUTUBE_API_KEY, YOUTUBE_CHANNEL_ID, YOUTUBE_STREAM_KEY,
+    KICK_USERNAME, KICK_STREAM_KEY
 )
 
 
+@dataclass
+class StreamConfig:
+    """Configuration for a streaming platform's RTMP output."""
+    platform_name: str
+    rtmp_url: str
+    stream_key: str
+    enabled: bool = True
+
+    @property
+    def full_rtmp_url(self) -> str:
+        """Get full RTMP URL with stream key."""
+        return f"{self.rtmp_url}/{self.stream_key}"
+
+
 class BasePlatformAPI:
-    """Base class for platform API integrations."""
+    """Base class for platform API integrations.
+    
+    To add a new platform:
+    1. Create a subclass of BasePlatformAPI
+    2. Implement the required methods
+    3. Register it with PlatformRegistry.register()
+    """
+    
+    PLATFORM_NAME: str = "unknown"
+    RTMP_URL: str = ""
+
+    def __init__(self):
+        self.enabled = True
+        self._stream_key = ""
 
     def get_viewers(self) -> int:
         """Get current viewer count."""
@@ -32,16 +62,92 @@ class BasePlatformAPI:
         """Get total donations amount."""
         return 0.0
 
+    def get_stream_config(self) -> Optional[StreamConfig]:
+        """Get stream configuration for this platform."""
+        if not self._stream_key:
+            return None
+        return StreamConfig(
+            platform_name=self.PLATFORM_NAME,
+            rtmp_url=self.RTMP_URL,
+            stream_key=self._stream_key,
+            enabled=self.enabled
+        )
+
+    def is_configured(self) -> bool:
+        """Check if platform has required credentials configured."""
+        return bool(self._stream_key)
+
+
+class PlatformRegistry:
+    """Registry for managing streaming platforms.
+    
+    Allows dynamic registration of new platforms for extensibility.
+    """
+    
+    _platforms: Dict[str, Type[BasePlatformAPI]] = {}
+    _instances: Dict[str, BasePlatformAPI] = {}
+
+    @classmethod
+    def register(cls, platform_class: Type[BasePlatformAPI]) -> None:
+        """Register a new platform API class."""
+        name = platform_class.PLATFORM_NAME.lower()
+        cls._platforms[name] = platform_class
+
+    @classmethod
+    def get(cls, name: str) -> Optional[BasePlatformAPI]:
+        """Get or create a platform instance by name."""
+        name = name.lower()
+        if name not in cls._instances and name in cls._platforms:
+            cls._instances[name] = cls._platforms[name]()
+        return cls._instances.get(name)
+
+    @classmethod
+    def get_all(cls) -> List[BasePlatformAPI]:
+        """Get all registered platform instances."""
+        for name in cls._platforms:
+            if name not in cls._instances:
+                cls._instances[name] = cls._platforms[name]()
+        return list(cls._instances.values())
+
+    @classmethod
+    def get_configured(cls) -> List[BasePlatformAPI]:
+        """Get all platforms that have credentials configured."""
+        return [p for p in cls.get_all() if p.is_configured()]
+
+    @classmethod
+    def get_enabled(cls) -> List[BasePlatformAPI]:
+        """Get all platforms that are enabled for streaming."""
+        return [p for p in cls.get_configured() if p.enabled]
+
+    @classmethod
+    def get_stream_configs(cls) -> List[StreamConfig]:
+        """Get stream configs for all enabled platforms."""
+        configs = []
+        for platform in cls.get_enabled():
+            config = platform.get_stream_config()
+            if config:
+                configs.append(config)
+        return configs
+
+    @classmethod
+    def list_available(cls) -> List[str]:
+        """List all registered platform names."""
+        return list(cls._platforms.keys())
+
 
 class TwitchAPI(BasePlatformAPI):
     """Twitch API integration for stream metrics."""
 
+    PLATFORM_NAME = "twitch"
+    RTMP_URL = "rtmp://live.twitch.tv/app"
     BASE_URL = "https://api.twitch.tv/helix"
 
     def __init__(self):
+        super().__init__()
         self.client_id = TWITCH_CLIENT_ID
         self.access_token = TWITCH_ACCESS_TOKEN
         self.channel_id = TWITCH_CHANNEL_ID
+        self._stream_key = TWITCH_STREAM_KEY
 
     def _get_headers(self) -> dict:
         """Get authorization headers for Twitch API."""
@@ -112,11 +218,15 @@ class TwitchAPI(BasePlatformAPI):
 class YouTubeAPI(BasePlatformAPI):
     """YouTube API integration for stream metrics."""
 
+    PLATFORM_NAME = "youtube"
+    RTMP_URL = "rtmp://a.rtmp.youtube.com/live2"
     BASE_URL = "https://www.googleapis.com/youtube/v3"
 
     def __init__(self):
+        super().__init__()
         self.api_key = YOUTUBE_API_KEY
         self.channel_id = YOUTUBE_CHANNEL_ID
+        self._stream_key = YOUTUBE_STREAM_KEY
 
     def get_viewers(self) -> int:
         """Get current live viewer count from YouTube."""
@@ -197,29 +307,71 @@ class YouTubeAPI(BasePlatformAPI):
 class KickAPI(BasePlatformAPI):
     """Kick API integration for stream metrics.
 
-    Note: Kick doesn't have an official public API yet.
-    This is a placeholder for future implementation.
+    Note: Kick uses a different ingest URL format.
+    Stream key format: kick_ingest_url?kick_stream_key
     """
 
+    PLATFORM_NAME = "kick"
+    RTMP_URL = "rtmps://fa723fc1b171.global-contribute.live-video.net/app"
+
     def __init__(self):
+        super().__init__()
         self.username = KICK_USERNAME
+        self._stream_key = KICK_STREAM_KEY
 
     def get_viewers(self) -> int:
-        """Get viewer count from Kick (unofficial)."""
+        """Get viewer count from Kick.
+        
+        Note: Kick has limited API access. This uses their
+        public channel endpoint when available.
+        """
         if not self.username:
             return 0
-        # TODO: Implement when Kick API becomes available
-        # Currently would require web scraping or unofficial endpoints
-        return 0
+        try:
+            # Kick's public API endpoint (may change)
+            response = requests.get(
+                f"https://kick.com/api/v2/channels/{self.username}",
+                timeout=10
+            )
+            if response.status_code == 200:
+                data = response.json()
+                livestream = data.get("livestream")
+                if livestream:
+                    return livestream.get("viewer_count", 0)
+            return 0
+        except Exception as e:
+            print(f"Kick API error: {e}")
+            return 0
 
     def get_followers(self) -> int:
         """Get follower count from Kick."""
-        return 0
+        if not self.username:
+            return 0
+        try:
+            response = requests.get(
+                f"https://kick.com/api/v2/channels/{self.username}",
+                timeout=10
+            )
+            if response.status_code == 200:
+                data = response.json()
+                return data.get("followers_count", 0)
+            return 0
+        except Exception as e:
+            print(f"Kick API error: {e}")
+            return 0
 
     def get_subscribers(self) -> int:
         """Get subscriber count from Kick."""
+        # Requires authenticated API access
         return 0
 
     def get_donations(self) -> float:
         """Get donations from Kick."""
+        # Requires authenticated API access
         return 0.0
+
+
+# Register all built-in platforms
+PlatformRegistry.register(TwitchAPI)
+PlatformRegistry.register(YouTubeAPI)
+PlatformRegistry.register(KickAPI)
