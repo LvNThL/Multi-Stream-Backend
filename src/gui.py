@@ -235,6 +235,11 @@ class MultiStreamApp:
         self.chat_status_labels: Dict[str, ttk.Label] = {}
         self.is_streaming = False
 
+        # Auto-refresh settings
+        self._auto_refresh_enabled = tk.BooleanVar(value=False)
+        self._refresh_interval = 30  # seconds
+        self._refresh_job = None
+
         self._create_widgets()
         self._check_platform_configs()
 
@@ -310,8 +315,21 @@ class MultiStreamApp:
         self.total_followers_label = ttk.Label(metrics_grid, text="0", font=("", 9, "bold"))
         self.total_followers_label.grid(row=row, column=2, padx=10)
 
-        # Refresh button
-        ttk.Button(self.metrics_frame, text="🔄 Refresh Metrics", command=self.update_metrics).pack(pady=(10, 0))
+        # Refresh controls frame
+        refresh_frame = ttk.Frame(self.metrics_frame)
+        refresh_frame.pack(fill=tk.X, pady=(10, 0))
+
+        ttk.Button(refresh_frame, text="🔄 Refresh", command=self.update_metrics).pack(side=tk.LEFT)
+
+        ttk.Checkbutton(
+            refresh_frame,
+            text="Auto-refresh (30s)",
+            variable=self._auto_refresh_enabled,
+            command=self._toggle_auto_refresh
+        ).pack(side=tk.LEFT, padx=(10, 0))
+
+        self.last_refresh_label = ttk.Label(refresh_frame, text="", foreground="gray")
+        self.last_refresh_label.pack(side=tk.RIGHT)
 
         # Right panel - Chat
         right_panel = ttk.Frame(main_frame)
@@ -460,6 +478,8 @@ class MultiStreamApp:
 
     def update_metrics(self):
         """Refresh metrics display from all platforms."""
+        import datetime
+
         total_viewers = 0
         total_followers = 0
 
@@ -480,6 +500,38 @@ class MultiStreamApp:
         # Update totals
         self.total_viewers_label.config(text=f"{total_viewers:,}")
         self.total_followers_label.config(text=f"{total_followers:,}")
+
+        # Update last refresh time
+        now = datetime.datetime.now().strftime("%H:%M:%S")
+        self.last_refresh_label.config(text=f"Last: {now}")
+
+    def _toggle_auto_refresh(self):
+        """Toggle automatic metrics refresh."""
+        if self._auto_refresh_enabled.get():
+            self._start_auto_refresh()
+        else:
+            self._stop_auto_refresh()
+
+    def _start_auto_refresh(self):
+        """Start automatic metrics refresh."""
+        self._stop_auto_refresh()  # Cancel any existing job
+        self._do_auto_refresh()
+
+    def _stop_auto_refresh(self):
+        """Stop automatic metrics refresh."""
+        if self._refresh_job:
+            self.root.after_cancel(self._refresh_job)
+            self._refresh_job = None
+
+    def _do_auto_refresh(self):
+        """Perform auto refresh and schedule next."""
+        if self._auto_refresh_enabled.get():
+            self.update_metrics()
+            # Schedule next refresh (30 seconds = 30000 ms)
+            self._refresh_job = self.root.after(
+                self._refresh_interval * 1000,
+                self._do_auto_refresh
+            )
 
     def send_chat_message(self, event=None):
         """Send chat message to all connected platforms."""
