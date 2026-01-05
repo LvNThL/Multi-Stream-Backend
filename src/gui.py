@@ -226,9 +226,13 @@ class MultiStreamApp:
         self.metrics = MetricsAggregator()
         self.chat = ChatManager()
 
+        # Register chat message callback
+        self.chat.add_message_callback(self._on_chat_message)
+
         # Track platform toggle states
         self.platform_vars: Dict[str, tk.BooleanVar] = {}
         self.platform_labels: Dict[str, ttk.Label] = {}
+        self.chat_status_labels: Dict[str, ttk.Label] = {}
         self.is_streaming = False
 
         self._create_widgets()
@@ -313,6 +317,20 @@ class MultiStreamApp:
         right_panel = ttk.Frame(main_frame)
         right_panel.pack(side=tk.RIGHT, fill=tk.BOTH, expand=True, padx=(5, 0))
 
+        # Chat connection status frame
+        chat_status_frame = ttk.LabelFrame(right_panel, text="Chat Connections", padding=5)
+        chat_status_frame.pack(fill=tk.X, pady=(0, 5))
+
+        for platform_name in ["twitch", "youtube", "kick"]:
+            row = ttk.Frame(chat_status_frame)
+            row.pack(fill=tk.X, pady=1)
+            ttk.Label(row, text=f"{platform_name.capitalize()}:", width=10).pack(side=tk.LEFT)
+            status_label = ttk.Label(row, text="● Disconnected", foreground="gray")
+            status_label.pack(side=tk.LEFT)
+            self.chat_status_labels[platform_name] = status_label
+            ttk.Button(row, text="Connect", width=8,
+                       command=lambda p=platform_name: self._connect_chat(p)).pack(side=tk.RIGHT)
+
         # Chat display frame
         chat_frame = ttk.LabelFrame(right_panel, text="Unified Chat", padding=10)
         chat_frame.pack(fill=tk.BOTH, expand=True)
@@ -327,6 +345,12 @@ class MultiStreamApp:
         self.chat_text = tk.Text(chat_container, height=15, state=tk.DISABLED, yscrollcommand=scrollbar.set)
         self.chat_text.pack(fill=tk.BOTH, expand=True)
         scrollbar.config(command=self.chat_text.yview)
+
+        # Configure chat text tags for platform colors
+        self.chat_text.tag_configure("twitch", foreground="#9146FF")
+        self.chat_text.tag_configure("youtube", foreground="#FF0000")
+        self.chat_text.tag_configure("kick", foreground="#53FC18")
+        self.chat_text.tag_configure("system", foreground="#888888")
 
         # Chat input frame
         input_frame = ttk.Frame(chat_frame)
@@ -458,19 +482,45 @@ class MultiStreamApp:
         self.total_followers_label.config(text=f"{total_followers:,}")
 
     def send_chat_message(self, event=None):
-        """Send chat message to backend and display locally."""
+        """Send chat message to all connected platforms."""
         message = self.chat_entry.get().strip()
         if message:
+            # Send to connected platform chats
+            results = self.chat.send_to_all(message)
+            # Also send to backend
             self.chat.send_message_sync("all", message)
-            self._append_chat(f"You: {message}")
+            self._append_chat("You", message, "system")
             self.chat_entry.delete(0, tk.END)
 
-    def _append_chat(self, text: str):
-        """Append text to chat display."""
+    def _append_chat(self, username: str, message: str, platform: str = "system"):
+        """Append a chat message with platform coloring."""
         self.chat_text.config(state=tk.NORMAL)
-        self.chat_text.insert(tk.END, f"{text}\n")
+        prefix = f"[{platform.upper()}] " if platform != "system" else ""
+        self.chat_text.insert(tk.END, f"{prefix}{username}: ", platform)
+        self.chat_text.insert(tk.END, f"{message}\n")
         self.chat_text.see(tk.END)
         self.chat_text.config(state=tk.DISABLED)
+
+    def _on_chat_message(self, platform: str, username: str, message: str, channel: str):
+        """Handle incoming chat messages from platforms."""
+        # Use after() to safely update GUI from another thread
+        self.root.after(0, lambda: self._append_chat(username, message, platform))
+
+    def _connect_chat(self, platform: str):
+        """Connect to a platform's chat."""
+        if self.chat.is_connected(platform):
+            messagebox.showinfo("Already Connected", f"Already connected to {platform.capitalize()} chat.")
+            return
+
+        if self.chat.connect_platform(platform):
+            self.chat_status_labels[platform].config(text="● Connected", foreground="green")
+            self._append_chat("System", f"Connected to {platform.capitalize()} chat", "system")
+        else:
+            messagebox.showerror(
+                "Connection Failed",
+                f"Could not connect to {platform.capitalize()} chat.\n\n"
+                "Make sure your credentials are configured in Settings."
+            )
 
     def _open_settings(self):
         """Open the settings dialog."""
