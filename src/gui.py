@@ -70,6 +70,11 @@ class SettingsDialog:
         self._create_field(twitch_frame, "twitch_channel_id", "Channel ID:")
         self._create_field(twitch_frame, "twitch_stream_key", "Stream Key:", show="*")
 
+        # Twitch OAuth button
+        twitch_btn_frame = ttk.Frame(twitch_frame)
+        twitch_btn_frame.pack(fill=tk.X, pady=(5, 0))
+        ttk.Button(twitch_btn_frame, text="🔐 Authenticate with Twitch",
+                   command=self._start_twitch_oauth).pack(side=tk.LEFT)
         ttk.Label(twitch_frame, text="Get credentials at: dev.twitch.tv/console",
                   foreground="blue", cursor="hand2").pack(anchor=tk.W, pady=(5, 0))
 
@@ -77,10 +82,18 @@ class SettingsDialog:
         youtube_frame = ttk.LabelFrame(scrollable_frame, text="YouTube", padding=10)
         youtube_frame.pack(fill=tk.X, pady=(0, 15))
 
+        self._create_field(youtube_frame, "youtube_client_id", "Client ID:")
+        self._create_field(youtube_frame, "youtube_client_secret", "Client Secret:", show="*")
+        self._create_field(youtube_frame, "youtube_access_token", "Access Token:", show="*")
         self._create_field(youtube_frame, "youtube_api_key", "API Key:", show="*")
         self._create_field(youtube_frame, "youtube_channel_id", "Channel ID:")
         self._create_field(youtube_frame, "youtube_stream_key", "Stream Key:", show="*")
 
+        # YouTube OAuth button
+        youtube_btn_frame = ttk.Frame(youtube_frame)
+        youtube_btn_frame.pack(fill=tk.X, pady=(5, 0))
+        ttk.Button(youtube_btn_frame, text="🔐 Authenticate with Google",
+                   command=self._start_youtube_oauth).pack(side=tk.LEFT)
         ttk.Label(youtube_frame, text="Get credentials at: console.cloud.google.com",
                   foreground="blue", cursor="hand2").pack(anchor=tk.W, pady=(5, 0))
 
@@ -133,6 +146,72 @@ class SettingsDialog:
         self.app.apply_settings(settings)
         messagebox.showinfo("Settings Saved", "Settings have been saved successfully.")
         self.dialog.destroy()
+
+    def _start_twitch_oauth(self):
+        """Start Twitch OAuth authentication flow."""
+        from platform_apis import TwitchOAuth
+
+        client_id = self.entries.get("twitch_client_id").get()
+        client_secret = self.entries.get("twitch_client_secret").get()
+
+        if not client_id or not client_secret:
+            messagebox.showwarning(
+                "Missing Credentials",
+                "Please enter your Twitch Client ID and Client Secret first."
+            )
+            return
+
+        def on_token_received(token: str):
+            # Update the access token field
+            self.dialog.after(0, lambda: self._set_twitch_token(token))
+
+        oauth = TwitchOAuth(client_id, client_secret, on_success=on_token_received)
+        if oauth.start_auth_flow():
+            messagebox.showinfo(
+                "Authentication Started",
+                "A browser window will open for Twitch authentication.\n\n"
+                "After authorizing, the access token will be filled automatically."
+            )
+
+    def _set_twitch_token(self, token: str):
+        """Set the Twitch access token in the entry field."""
+        if "twitch_access_token" in self.entries:
+            self.entries["twitch_access_token"].delete(0, tk.END)
+            self.entries["twitch_access_token"].insert(0, token)
+            messagebox.showinfo("Success", "Twitch access token received!")
+
+    def _start_youtube_oauth(self):
+        """Start YouTube/Google OAuth authentication flow."""
+        from platform_apis import YouTubeOAuth
+
+        client_id = self.entries.get("youtube_client_id").get()
+        client_secret = self.entries.get("youtube_client_secret").get()
+
+        if not client_id or not client_secret:
+            messagebox.showwarning(
+                "Missing Credentials",
+                "Please enter your YouTube/Google Client ID and Client Secret first.\n\n"
+                "Create OAuth credentials at console.cloud.google.com"
+            )
+            return
+
+        def on_token_received(token: str):
+            self.dialog.after(0, lambda: self._set_youtube_token(token))
+
+        oauth = YouTubeOAuth(client_id, client_secret, on_success=on_token_received)
+        if oauth.start_auth_flow():
+            messagebox.showinfo(
+                "Authentication Started",
+                "A browser window will open for Google authentication.\n\n"
+                "After authorizing, the access token will be filled automatically."
+            )
+
+    def _set_youtube_token(self, token: str):
+        """Set the YouTube access token in the entry field."""
+        if "youtube_access_token" in self.entries:
+            self.entries["youtube_access_token"].delete(0, tk.END)
+            self.entries["youtube_access_token"].insert(0, token)
+            messagebox.showinfo("Success", "YouTube access token received!")
 
 
 class MultiStreamApp:
@@ -409,6 +488,9 @@ class MultiStreamApp:
             "twitch_access_token": getattr(config, 'TWITCH_ACCESS_TOKEN', ''),
             "twitch_channel_id": getattr(config, 'TWITCH_CHANNEL_ID', ''),
             "twitch_stream_key": getattr(config, 'TWITCH_STREAM_KEY', ''),
+            "youtube_client_id": getattr(config, 'YOUTUBE_CLIENT_ID', ''),
+            "youtube_client_secret": getattr(config, 'YOUTUBE_CLIENT_SECRET', ''),
+            "youtube_access_token": getattr(config, 'YOUTUBE_ACCESS_TOKEN', ''),
             "youtube_api_key": getattr(config, 'YOUTUBE_API_KEY', ''),
             "youtube_channel_id": getattr(config, 'YOUTUBE_CHANNEL_ID', ''),
             "youtube_stream_key": getattr(config, 'YOUTUBE_STREAM_KEY', ''),
@@ -432,6 +514,9 @@ class MultiStreamApp:
         config.TWITCH_CHANNEL_ID = settings.get("twitch_channel_id", "")
         config.TWITCH_STREAM_KEY = settings.get("twitch_stream_key", "")
 
+        config.YOUTUBE_CLIENT_ID = settings.get("youtube_client_id", "")
+        config.YOUTUBE_CLIENT_SECRET = settings.get("youtube_client_secret", "")
+        config.YOUTUBE_ACCESS_TOKEN = settings.get("youtube_access_token", "")
         config.YOUTUBE_API_KEY = settings.get("youtube_api_key", "")
         config.YOUTUBE_CHANNEL_ID = settings.get("youtube_channel_id", "")
         config.YOUTUBE_STREAM_KEY = settings.get("youtube_stream_key", "")

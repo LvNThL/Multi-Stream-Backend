@@ -77,6 +77,9 @@ TWITCH_STREAM_KEY = get_setting("twitch_stream_key", "")
 # Get credentials from: https://console.cloud.google.com/
 # Stream key from: YouTube Studio > Go Live > Stream Settings
 # =============================================================================
+YOUTUBE_CLIENT_ID = get_setting("youtube_client_id", "")
+YOUTUBE_CLIENT_SECRET = get_setting("youtube_client_secret", "")
+YOUTUBE_ACCESS_TOKEN = get_setting("youtube_access_token", "")
 YOUTUBE_API_KEY = get_setting("youtube_api_key", "")
 YOUTUBE_CHANNEL_ID = get_setting("youtube_channel_id", "")
 YOUTUBE_STREAM_KEY = get_setting("youtube_stream_key", "")

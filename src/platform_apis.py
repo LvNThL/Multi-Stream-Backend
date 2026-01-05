@@ -6,14 +6,227 @@ with a registry system to easily add new platforms.
 """
 
 import requests
-from typing import Optional, Dict, Type, List
+import webbrowser
+import urllib.parse
+import threading
+import http.server
+import socketserver
+from typing import Optional, Dict, Type, List, Callable
 from dataclasses import dataclass
 from config import (
     TWITCH_CLIENT_ID, TWITCH_ACCESS_TOKEN, TWITCH_CHANNEL_ID,
-    TWITCH_STREAM_KEY,
+    TWITCH_STREAM_KEY, TWITCH_CLIENT_SECRET,
     YOUTUBE_API_KEY, YOUTUBE_CHANNEL_ID, YOUTUBE_STREAM_KEY,
     KICK_USERNAME, KICK_STREAM_KEY
 )
+
+
+# OAuth callback port
+OAUTH_CALLBACK_PORT = 3000
+
+
+class OAuthCallbackHandler(http.server.SimpleHTTPRequestHandler):
+    """HTTP handler for OAuth callbacks."""
+
+    def __init__(self, *args, callback: Callable[[Dict], None] = None, **kwargs):
+        self.callback = callback
+        super().__init__(*args, **kwargs)
+
+    def do_GET(self):
+        """Handle GET request from OAuth redirect."""
+        parsed = urllib.parse.urlparse(self.path)
+        params = urllib.parse.parse_qs(parsed.query)
+
+        # Send response to browser
+        self.send_response(200)
+        self.send_header('Content-type', 'text/html')
+        self.end_headers()
+
+        if 'code' in params:
+            self.wfile.write(b"""
+                <html><body style="font-family: sans-serif; text-align: center; padding: 50px;">
+                <h1>Authorization Successful!</h1>
+                <p>You can close this window and return to the app.</p>
+                </body></html>
+            """)
+            if self.callback:
+                self.callback({'code': params['code'][0]})
+        elif 'error' in params:
+            self.wfile.write(f"""
+                <html><body style="font-family: sans-serif; text-align: center; padding: 50px;">
+                <h1>Authorization Failed</h1>
+                <p>Error: {params.get('error_description', ['Unknown error'])[0]}</p>
+                </body></html>
+            """.encode())
+            if self.callback:
+                self.callback({'error': params.get('error', ['unknown'])[0]})
+
+    def log_message(self, format, *args):
+        """Suppress logging."""
+        pass
+
+
+class TwitchOAuth:
+    """Handle Twitch OAuth authentication flow."""
+
+    AUTH_URL = "https://id.twitch.tv/oauth2/authorize"
+    TOKEN_URL = "https://id.twitch.tv/oauth2/token"
+    SCOPES = [
+        "channel:read:subscriptions",
+        "channel:read:stream_key",
+        "chat:read",
+        "chat:edit",
+        "user:read:email"
+    ]
+
+    def __init__(self, client_id: str, client_secret: str,
+                 on_success: Callable[[str], None] = None):
+        self.client_id = client_id
+        self.client_secret = client_secret
+        self.on_success = on_success
+        self.redirect_uri = f"http://localhost:{OAUTH_CALLBACK_PORT}/callback"
+        self._server = None
+        self._auth_code = None
+
+    def start_auth_flow(self) -> bool:
+        """Start the OAuth flow by opening the browser."""
+        if not self.client_id or not self.client_secret:
+            print("Twitch Client ID and Secret required for OAuth")
+            return False
+
+        # Build authorization URL
+        params = {
+            'client_id': self.client_id,
+            'redirect_uri': self.redirect_uri,
+            'response_type': 'code',
+            'scope': ' '.join(self.SCOPES)
+        }
+        auth_url = f"{self.AUTH_URL}?{urllib.parse.urlencode(params)}"
+
+        # Start callback server in background
+        self._start_callback_server()
+
+        # Open browser
+        webbrowser.open(auth_url)
+        return True
+
+    def _start_callback_server(self):
+        """Start a local server to receive the OAuth callback."""
+        def handler(*args, **kwargs):
+            return OAuthCallbackHandler(*args, callback=self._handle_callback, **kwargs)
+
+        def run_server():
+            with socketserver.TCPServer(("", OAUTH_CALLBACK_PORT), handler) as httpd:
+                self._server = httpd
+                httpd.handle_request()  # Handle one request then stop
+
+        thread = threading.Thread(target=run_server, daemon=True)
+        thread.start()
+
+    def _handle_callback(self, params: Dict):
+        """Handle the OAuth callback."""
+        if 'code' in params:
+            self._auth_code = params['code']
+            token = self._exchange_code_for_token(params['code'])
+            if token and self.on_success:
+                self.on_success(token)
+
+    def _exchange_code_for_token(self, code: str) -> Optional[str]:
+        """Exchange authorization code for access token."""
+        try:
+            response = requests.post(self.TOKEN_URL, data={
+                'client_id': self.client_id,
+                'client_secret': self.client_secret,
+                'code': code,
+                'grant_type': 'authorization_code',
+                'redirect_uri': self.redirect_uri
+            }, timeout=10)
+            response.raise_for_status()
+            data = response.json()
+            return data.get('access_token')
+        except Exception as e:
+            print(f"Failed to exchange code for token: {e}")
+            return None
+
+
+class YouTubeOAuth:
+    """Handle YouTube/Google OAuth authentication flow."""
+
+    AUTH_URL = "https://accounts.google.com/o/oauth2/v2/auth"
+    TOKEN_URL = "https://oauth2.googleapis.com/token"
+    SCOPES = [
+        "https://www.googleapis.com/auth/youtube.readonly",
+        "https://www.googleapis.com/auth/youtube.force-ssl"  # For live chat
+    ]
+
+    def __init__(self, client_id: str, client_secret: str,
+                 on_success: Callable[[str], None] = None):
+        self.client_id = client_id
+        self.client_secret = client_secret
+        self.on_success = on_success
+        self.redirect_uri = f"http://localhost:{OAUTH_CALLBACK_PORT}/callback"
+        self._server = None
+
+    def start_auth_flow(self) -> bool:
+        """Start the OAuth flow by opening the browser."""
+        if not self.client_id or not self.client_secret:
+            print("YouTube Client ID and Secret required for OAuth")
+            return False
+
+        # Build authorization URL
+        params = {
+            'client_id': self.client_id,
+            'redirect_uri': self.redirect_uri,
+            'response_type': 'code',
+            'scope': ' '.join(self.SCOPES),
+            'access_type': 'offline',
+            'prompt': 'consent'
+        }
+        auth_url = f"{self.AUTH_URL}?{urllib.parse.urlencode(params)}"
+
+        # Start callback server in background
+        self._start_callback_server()
+
+        # Open browser
+        webbrowser.open(auth_url)
+        return True
+
+    def _start_callback_server(self):
+        """Start a local server to receive the OAuth callback."""
+        def handler(*args, **kwargs):
+            return OAuthCallbackHandler(*args, callback=self._handle_callback, **kwargs)
+
+        def run_server():
+            with socketserver.TCPServer(("", OAUTH_CALLBACK_PORT), handler) as httpd:
+                self._server = httpd
+                httpd.handle_request()
+
+        thread = threading.Thread(target=run_server, daemon=True)
+        thread.start()
+
+    def _handle_callback(self, params: Dict):
+        """Handle the OAuth callback."""
+        if 'code' in params:
+            token = self._exchange_code_for_token(params['code'])
+            if token and self.on_success:
+                self.on_success(token)
+
+    def _exchange_code_for_token(self, code: str) -> Optional[str]:
+        """Exchange authorization code for access token."""
+        try:
+            response = requests.post(self.TOKEN_URL, data={
+                'client_id': self.client_id,
+                'client_secret': self.client_secret,
+                'code': code,
+                'grant_type': 'authorization_code',
+                'redirect_uri': self.redirect_uri
+            }, timeout=10)
+            response.raise_for_status()
+            data = response.json()
+            return data.get('access_token')
+        except Exception as e:
+            print(f"Failed to exchange code for token: {e}")
+            return None
 
 
 @dataclass
