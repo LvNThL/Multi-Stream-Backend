@@ -235,6 +235,10 @@ class MultiStreamApp:
         self.chat_status_labels: Dict[str, ttk.Label] = {}
         self.is_streaming = False
 
+        # Stream health labels
+        self.health_labels: Dict[str, ttk.Label] = {}
+        self._health_monitor_job = None
+
         # Auto-refresh settings
         self._auto_refresh_enabled = tk.BooleanVar(value=False)
         self._refresh_interval = 30  # seconds
@@ -280,6 +284,44 @@ class MultiStreamApp:
             control_frame, text="▶ Start Streaming", command=self.toggle_streaming
         )
         self.stream_button.pack(fill=tk.X, ipady=10)
+
+        # Stream Health Monitor frame
+        health_frame = ttk.LabelFrame(left_panel, text="Stream Health", padding=10)
+        health_frame.pack(fill=tk.X, pady=(0, 10))
+
+        health_grid = ttk.Frame(health_frame)
+        health_grid.pack(fill=tk.X)
+
+        # Connection status
+        ttk.Label(health_grid, text="OBS Status:").grid(row=0, column=0, sticky=tk.W, pady=2)
+        self.health_labels["obs_status"] = ttk.Label(health_grid, text="● Disconnected", foreground="gray")
+        self.health_labels["obs_status"].grid(row=0, column=1, sticky=tk.W, padx=(10, 0), pady=2)
+
+        # Stream time
+        ttk.Label(health_grid, text="Stream Time:").grid(row=1, column=0, sticky=tk.W, pady=2)
+        self.health_labels["stream_time"] = ttk.Label(health_grid, text="--:--:--", foreground="gray")
+        self.health_labels["stream_time"].grid(row=1, column=1, sticky=tk.W, padx=(10, 0), pady=2)
+
+        # Bitrate
+        ttk.Label(health_grid, text="Bitrate:").grid(row=2, column=0, sticky=tk.W, pady=2)
+        self.health_labels["bitrate"] = ttk.Label(health_grid, text="-- kbps", foreground="gray")
+        self.health_labels["bitrate"].grid(row=2, column=1, sticky=tk.W, padx=(10, 0), pady=2)
+
+        # Dropped frames
+        ttk.Label(health_grid, text="Dropped Frames:").grid(row=3, column=0, sticky=tk.W, pady=2)
+        self.health_labels["dropped"] = ttk.Label(health_grid, text="0 (0.0%)", foreground="gray")
+        self.health_labels["dropped"].grid(row=3, column=1, sticky=tk.W, padx=(10, 0), pady=2)
+
+        # FPS
+        ttk.Label(health_grid, text="FPS:").grid(row=4, column=0, sticky=tk.W, pady=2)
+        self.health_labels["fps"] = ttk.Label(health_grid, text="-- fps", foreground="gray")
+        self.health_labels["fps"].grid(row=4, column=1, sticky=tk.W, padx=(10, 0), pady=2)
+
+        # Overall health indicator
+        ttk.Separator(health_grid, orient=tk.HORIZONTAL).grid(row=5, column=0, columnspan=2, sticky="ew", pady=5)
+        ttk.Label(health_grid, text="Overall:", font=("", 9, "bold")).grid(row=6, column=0, sticky=tk.W, pady=2)
+        self.health_labels["overall"] = ttk.Label(health_grid, text="● Not Streaming", foreground="gray", font=("", 9, "bold"))
+        self.health_labels["overall"].grid(row=6, column=1, sticky=tk.W, padx=(10, 0), pady=2)
 
         # Metrics display frame
         self.metrics_frame = ttk.LabelFrame(left_panel, text="Live Metrics", padding=10)
@@ -436,10 +478,13 @@ class MultiStreamApp:
             self.obs.disconnect()
             self.obs_status_label.config(text="● Disconnected", foreground="red")
             self.connect_obs_btn.config(text="Connect to OBS")
+            self._stop_health_monitor()
+            self._set_health_disconnected()
         else:
             if self.obs.connect():
                 self.obs_status_label.config(text="● Connected", foreground="green")
                 self.connect_obs_btn.config(text="Disconnect")
+                self._start_health_monitor()
             else:
                 messagebox.showerror(
                     "Connection Failed",
@@ -532,6 +577,98 @@ class MultiStreamApp:
                 self._refresh_interval * 1000,
                 self._do_auto_refresh
             )
+
+    def _start_health_monitor(self):
+        """Start stream health monitoring (every 2 seconds)."""
+        self._stop_health_monitor()
+        self._update_health()
+
+    def _stop_health_monitor(self):
+        """Stop stream health monitoring."""
+        if self._health_monitor_job:
+            self.root.after_cancel(self._health_monitor_job)
+            self._health_monitor_job = None
+
+    def _update_health(self):
+        """Update stream health indicators."""
+        if not self.obs.connected:
+            self._set_health_disconnected()
+            return
+
+        # Get stream stats from OBS
+        stats = self.obs.get_stream_stats()
+
+        if not stats or not stats.get("outputActive", False):
+            self._set_health_not_streaming()
+            # Schedule next check
+            self._health_monitor_job = self.root.after(2000, self._update_health)
+            return
+
+        # Update OBS status
+        self.health_labels["obs_status"].config(text="● Connected", foreground="green")
+
+        # Stream time (convert seconds to HH:MM:SS)
+        duration_ms = stats.get("outputDuration", 0)
+        duration_sec = duration_ms // 1000
+        hours = duration_sec // 3600
+        minutes = (duration_sec % 3600) // 60
+        seconds = duration_sec % 60
+        self.health_labels["stream_time"].config(
+            text=f"{hours:02d}:{minutes:02d}:{seconds:02d}",
+            foreground="white"
+        )
+
+        # Bitrate
+        bitrate = stats.get("outputBytes", 0)
+        # Calculate bitrate in kbps (simplified - show current rate)
+        kbps = stats.get("outputSkippedFrames", 0)  # Use skipped as proxy for issues
+        bitrate_kbps = round(bitrate / 1024 / max(1, duration_sec) * 8) if duration_sec > 0 else 0
+        self.health_labels["bitrate"].config(text=f"{bitrate_kbps:,} kbps", foreground="white")
+
+        # Dropped frames
+        total_frames = stats.get("outputTotalFrames", 1)
+        dropped_frames = stats.get("outputSkippedFrames", 0)
+        drop_percent = (dropped_frames / max(1, total_frames)) * 100
+        drop_color = "green" if drop_percent < 1 else ("yellow" if drop_percent < 5 else "red")
+        self.health_labels["dropped"].config(
+            text=f"{dropped_frames:,} ({drop_percent:.1f}%)",
+            foreground=drop_color
+        )
+
+        # FPS (estimate from frames and duration)
+        fps = round(total_frames / max(1, duration_sec)) if duration_sec > 0 else 0
+        self.health_labels["fps"].config(text=f"{fps} fps", foreground="white")
+
+        # Overall health
+        if drop_percent < 1:
+            self.health_labels["overall"].config(text="● Excellent", foreground="green")
+        elif drop_percent < 3:
+            self.health_labels["overall"].config(text="● Good", foreground="lime")
+        elif drop_percent < 5:
+            self.health_labels["overall"].config(text="● Fair", foreground="yellow")
+        else:
+            self.health_labels["overall"].config(text="● Poor", foreground="red")
+
+        # Schedule next update
+        self._health_monitor_job = self.root.after(2000, self._update_health)
+
+    def _set_health_disconnected(self):
+        """Set health indicators to disconnected state."""
+        self.health_labels["obs_status"].config(text="● Disconnected", foreground="gray")
+        self.health_labels["stream_time"].config(text="--:--:--", foreground="gray")
+        self.health_labels["bitrate"].config(text="-- kbps", foreground="gray")
+        self.health_labels["dropped"].config(text="0 (0.0%)", foreground="gray")
+        self.health_labels["fps"].config(text="-- fps", foreground="gray")
+        self.health_labels["overall"].config(text="● Disconnected", foreground="gray")
+
+    def _set_health_not_streaming(self):
+        """Set health indicators to not streaming state."""
+        self.health_labels["obs_status"].config(text="● Connected", foreground="green")
+        self.health_labels["stream_time"].config(text="--:--:--", foreground="gray")
+        self.health_labels["bitrate"].config(text="-- kbps", foreground="gray")
+        self.health_labels["dropped"].config(text="0 (0.0%)", foreground="gray")
+        self.health_labels["fps"].config(text="-- fps", foreground="gray")
+        self.health_labels["overall"].config(text="● Not Streaming", foreground="gray")
 
     def send_chat_message(self, event=None):
         """Send chat message to all connected platforms."""
