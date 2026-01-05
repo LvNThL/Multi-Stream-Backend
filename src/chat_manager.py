@@ -8,10 +8,12 @@ import socket
 import threading
 import requests
 import time
+import json
 from typing import List, Dict, Optional, Callable
 from config import (
     BACKEND_URL, TWITCH_ACCESS_TOKEN, TWITCH_CHANNEL_ID,
-    YOUTUBE_ACCESS_TOKEN, YOUTUBE_CHANNEL_ID
+    YOUTUBE_ACCESS_TOKEN, YOUTUBE_CHANNEL_ID,
+    KICK_USERNAME
 )
 
 
@@ -280,6 +282,108 @@ class YouTubeLiveChat:
             time.sleep(poll_interval)
 
 
+class KickChat:
+    """Kick chat client using their public API.
+    
+    Note: Kick uses Pusher WebSockets for real-time chat.
+    This implementation polls the public API as a fallback.
+    """
+
+    BASE_URL = "https://kick.com/api/v2"
+
+    def __init__(self, username: str,
+                 on_message: Callable[[str, str, str], None] = None):
+        """Initialize Kick chat client.
+
+        Args:
+            username: Kick channel username
+            on_message: Callback for received messages (username, message, channel)
+        """
+        self.username = username.lower()
+        self.on_message = on_message
+        self._running = False
+        self._thread: Optional[threading.Thread] = None
+        self._chatroom_id: Optional[int] = None
+        self._last_message_id: int = 0
+        self.connected = False
+
+    def connect(self) -> bool:
+        """Connect to Kick chat by getting channel info."""
+        if not self.username:
+            print("Kick Chat: Missing username")
+            return False
+
+        # Get channel info to find chatroom ID
+        try:
+            response = requests.get(
+                f"{self.BASE_URL}/channels/{self.username}",
+                timeout=10
+            )
+            if response.status_code != 200:
+                print(f"Kick Chat: Channel not found - {self.username}")
+                return False
+
+            data = response.json()
+            self._chatroom_id = data.get("chatroom", {}).get("id")
+
+            if not self._chatroom_id:
+                print("Kick Chat: Could not find chatroom ID")
+                return False
+
+            self._running = True
+            self.connected = True
+            self._thread = threading.Thread(target=self._poll_messages, daemon=True)
+            self._thread.start()
+
+            print(f"Kick Chat: Connected to {self.username}")
+            return True
+        except Exception as e:
+            print(f"Kick Chat: Connection failed - {e}")
+            return False
+
+    def disconnect(self):
+        """Disconnect from Kick chat."""
+        self._running = False
+        self.connected = False
+
+    def send_message(self, message: str) -> bool:
+        """Send a message to Kick chat.
+        
+        Note: Sending messages requires authentication which Kick
+        doesn't publicly document. This is a placeholder.
+        """
+        print("Kick Chat: Sending messages not supported (requires auth)")
+        return False
+
+    def _poll_messages(self):
+        """Poll for new messages."""
+        poll_interval = 3  # seconds
+
+        while self._running and self._chatroom_id:
+            try:
+                response = requests.get(
+                    f"{self.BASE_URL}/channels/{self.username}/messages",
+                    timeout=10
+                )
+                if response.status_code == 200:
+                    data = response.json()
+                    messages = data.get("data", {}).get("messages", [])
+
+                    for msg in messages:
+                        msg_id = msg.get("id", 0)
+                        if msg_id > self._last_message_id:
+                            self._last_message_id = msg_id
+                            username = msg.get("sender", {}).get("username", "Unknown")
+                            content = msg.get("content", "")
+                            if self.on_message and content:
+                                self.on_message(username, content, self.username)
+
+            except Exception as e:
+                print(f"Kick Chat: Poll error - {e}")
+
+            time.sleep(poll_interval)
+
+
 class ChatManager:
     """Manages chat connections and messages for multiple platforms."""
 
@@ -356,6 +460,30 @@ class ChatManager:
             return True
         return False
 
+    def connect_kick(self, username: str = None) -> bool:
+        """Connect to Kick chat.
+
+        Args:
+            username: Kick username (uses config if not provided)
+
+        Returns:
+            True if connected successfully
+        """
+        user = username or KICK_USERNAME
+
+        if not user:
+            print("Kick chat: Missing username")
+            return False
+
+        def on_kick_message(username: str, message: str, channel: str):
+            self._notify_message("kick", username, message, channel)
+
+        chat = KickChat(user, on_message=on_kick_message)
+        if chat.connect():
+            self.connections["kick"] = chat
+            return True
+        return False
+
     def send_message_sync(self, platform: str, message: str) -> bool:
         """Send a chat message synchronously.
 
@@ -415,9 +543,7 @@ class ChatManager:
         elif platform == "youtube":
             return self.connect_youtube()
         elif platform == "kick":
-            # Kick chat will be implemented in task 7
-            print("Kick chat: Not yet implemented")
-            return False
+            return self.connect_kick()
         else:
             print(f"Unknown platform: {platform}")
             return False
@@ -439,6 +565,8 @@ class ChatManager:
         if platform.lower() == "twitch" and isinstance(conn, TwitchIRC):
             return conn.send_message(message)
         elif platform.lower() == "youtube" and isinstance(conn, YouTubeLiveChat):
+            return conn.send_message(message)
+        elif platform.lower() == "kick" and isinstance(conn, KickChat):
             return conn.send_message(message)
 
         return False
