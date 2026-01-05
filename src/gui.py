@@ -6,12 +6,133 @@ Provides multi-platform streaming controls with per-platform toggles.
 
 import tkinter as tk
 from tkinter import ttk, messagebox
-from typing import Dict
+from typing import Dict, Optional
 from obs_integration import OBSController
 from metrics_aggregator import MetricsAggregator
 from chat_manager import ChatManager
 from platform_apis import PlatformRegistry
 from config import WINDOW_TITLE, WINDOW_SIZE, OBS_HOST, OBS_PORT, OBS_PASSWORD
+
+
+class SettingsDialog:
+    """Settings dialog for configuring credentials and preferences."""
+
+    def __init__(self, parent, app: "MultiStreamApp"):
+        self.app = app
+        self.dialog = tk.Toplevel(parent)
+        self.dialog.title("Settings")
+        self.dialog.geometry("500x600")
+        self.dialog.transient(parent)
+        self.dialog.grab_set()
+
+        # Store entry references
+        self.entries: Dict[str, ttk.Entry] = {}
+
+        self._create_widgets()
+        self._load_current_values()
+
+        # Center the dialog
+        self.dialog.update_idletasks()
+        x = parent.winfo_x() + (parent.winfo_width() - self.dialog.winfo_width()) // 2
+        y = parent.winfo_y() + (parent.winfo_height() - self.dialog.winfo_height()) // 2
+        self.dialog.geometry(f"+{x}+{y}")
+
+    def _create_widgets(self):
+        """Create settings form widgets."""
+        # Main container with scrollbar
+        canvas = tk.Canvas(self.dialog)
+        scrollbar = ttk.Scrollbar(self.dialog, orient="vertical", command=canvas.yview)
+        scrollable_frame = ttk.Frame(canvas, padding=20)
+
+        scrollable_frame.bind(
+            "<Configure>",
+            lambda e: canvas.configure(scrollregion=canvas.bbox("all"))
+        )
+
+        canvas.create_window((0, 0), window=scrollable_frame, anchor="nw")
+        canvas.configure(yscrollcommand=scrollbar.set)
+
+        # OBS Settings Section
+        obs_frame = ttk.LabelFrame(scrollable_frame, text="OBS WebSocket", padding=10)
+        obs_frame.pack(fill=tk.X, pady=(0, 15))
+
+        self._create_field(obs_frame, "obs_host", "Host:", "localhost")
+        self._create_field(obs_frame, "obs_port", "Port:", "4455")
+        self._create_field(obs_frame, "obs_password", "Password:", "", show="*")
+
+        # Twitch Settings Section
+        twitch_frame = ttk.LabelFrame(scrollable_frame, text="Twitch", padding=10)
+        twitch_frame.pack(fill=tk.X, pady=(0, 15))
+
+        self._create_field(twitch_frame, "twitch_client_id", "Client ID:")
+        self._create_field(twitch_frame, "twitch_client_secret", "Client Secret:", show="*")
+        self._create_field(twitch_frame, "twitch_access_token", "Access Token:", show="*")
+        self._create_field(twitch_frame, "twitch_channel_id", "Channel ID:")
+        self._create_field(twitch_frame, "twitch_stream_key", "Stream Key:", show="*")
+
+        ttk.Label(twitch_frame, text="Get credentials at: dev.twitch.tv/console",
+                  foreground="blue", cursor="hand2").pack(anchor=tk.W, pady=(5, 0))
+
+        # YouTube Settings Section
+        youtube_frame = ttk.LabelFrame(scrollable_frame, text="YouTube", padding=10)
+        youtube_frame.pack(fill=tk.X, pady=(0, 15))
+
+        self._create_field(youtube_frame, "youtube_api_key", "API Key:", show="*")
+        self._create_field(youtube_frame, "youtube_channel_id", "Channel ID:")
+        self._create_field(youtube_frame, "youtube_stream_key", "Stream Key:", show="*")
+
+        ttk.Label(youtube_frame, text="Get credentials at: console.cloud.google.com",
+                  foreground="blue", cursor="hand2").pack(anchor=tk.W, pady=(5, 0))
+
+        # Kick Settings Section
+        kick_frame = ttk.LabelFrame(scrollable_frame, text="Kick", padding=10)
+        kick_frame.pack(fill=tk.X, pady=(0, 15))
+
+        self._create_field(kick_frame, "kick_username", "Username:")
+        self._create_field(kick_frame, "kick_stream_key", "Stream Key:", show="*")
+
+        ttk.Label(kick_frame, text="Get stream key from: kick.com/dashboard/settings/stream",
+                  foreground="blue", cursor="hand2").pack(anchor=tk.W, pady=(5, 0))
+
+        # Buttons
+        btn_frame = ttk.Frame(scrollable_frame)
+        btn_frame.pack(fill=tk.X, pady=(10, 0))
+
+        ttk.Button(btn_frame, text="Save", command=self._save_settings).pack(side=tk.RIGHT, padx=(5, 0))
+        ttk.Button(btn_frame, text="Cancel", command=self.dialog.destroy).pack(side=tk.RIGHT)
+
+        # Pack canvas and scrollbar
+        canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+
+    def _create_field(self, parent: ttk.Frame, key: str, label: str,
+                      default: str = "", show: str = ""):
+        """Create a labeled entry field."""
+        frame = ttk.Frame(parent)
+        frame.pack(fill=tk.X, pady=2)
+
+        ttk.Label(frame, text=label, width=15).pack(side=tk.LEFT)
+        entry = ttk.Entry(frame, show=show)
+        entry.pack(side=tk.LEFT, fill=tk.X, expand=True)
+        entry.insert(0, default)
+
+        self.entries[key] = entry
+
+    def _load_current_values(self):
+        """Load current configuration values into fields."""
+        # Load from app's current settings
+        settings = self.app.get_current_settings()
+        for key, value in settings.items():
+            if key in self.entries and value:
+                self.entries[key].delete(0, tk.END)
+                self.entries[key].insert(0, value)
+
+    def _save_settings(self):
+        """Save settings and update the application."""
+        settings = {key: entry.get() for key, entry in self.entries.items()}
+        self.app.apply_settings(settings)
+        messagebox.showinfo("Settings Saved", "Settings have been saved successfully.")
+        self.dialog.destroy()
 
 
 class MultiStreamApp:
@@ -51,6 +172,7 @@ class MultiStreamApp:
         self.obs_status_label = ttk.Label(obs_frame, text="● Disconnected", foreground="red")
         self.obs_status_label.pack(side=tk.LEFT)
 
+        ttk.Button(obs_frame, text="⚙ Settings", command=self._open_settings).pack(side=tk.RIGHT, padx=(5, 0))
         self.connect_obs_btn = ttk.Button(obs_frame, text="Connect to OBS", command=self._toggle_obs_connection)
         self.connect_obs_btn.pack(side=tk.RIGHT)
 
@@ -270,6 +392,69 @@ class MultiStreamApp:
         self.chat_text.insert(tk.END, f"{text}\n")
         self.chat_text.see(tk.END)
         self.chat_text.config(state=tk.DISABLED)
+
+    def _open_settings(self):
+        """Open the settings dialog."""
+        SettingsDialog(self.root, self)
+
+    def get_current_settings(self) -> Dict[str, str]:
+        """Get current settings for the settings dialog."""
+        import config
+        return {
+            "obs_host": getattr(config, 'OBS_HOST', 'localhost'),
+            "obs_port": str(getattr(config, 'OBS_PORT', 4455)),
+            "obs_password": getattr(config, 'OBS_PASSWORD', ''),
+            "twitch_client_id": getattr(config, 'TWITCH_CLIENT_ID', ''),
+            "twitch_client_secret": getattr(config, 'TWITCH_CLIENT_SECRET', ''),
+            "twitch_access_token": getattr(config, 'TWITCH_ACCESS_TOKEN', ''),
+            "twitch_channel_id": getattr(config, 'TWITCH_CHANNEL_ID', ''),
+            "twitch_stream_key": getattr(config, 'TWITCH_STREAM_KEY', ''),
+            "youtube_api_key": getattr(config, 'YOUTUBE_API_KEY', ''),
+            "youtube_channel_id": getattr(config, 'YOUTUBE_CHANNEL_ID', ''),
+            "youtube_stream_key": getattr(config, 'YOUTUBE_STREAM_KEY', ''),
+            "kick_username": getattr(config, 'KICK_USERNAME', ''),
+            "kick_stream_key": getattr(config, 'KICK_STREAM_KEY', ''),
+        }
+
+    def apply_settings(self, settings: Dict[str, str]):
+        """Apply new settings to the application."""
+        import config
+        from config import save_settings
+
+        # Update config module values
+        config.OBS_HOST = settings.get("obs_host", "localhost")
+        config.OBS_PORT = int(settings.get("obs_port", 4455))
+        config.OBS_PASSWORD = settings.get("obs_password", "")
+
+        config.TWITCH_CLIENT_ID = settings.get("twitch_client_id", "")
+        config.TWITCH_CLIENT_SECRET = settings.get("twitch_client_secret", "")
+        config.TWITCH_ACCESS_TOKEN = settings.get("twitch_access_token", "")
+        config.TWITCH_CHANNEL_ID = settings.get("twitch_channel_id", "")
+        config.TWITCH_STREAM_KEY = settings.get("twitch_stream_key", "")
+
+        config.YOUTUBE_API_KEY = settings.get("youtube_api_key", "")
+        config.YOUTUBE_CHANNEL_ID = settings.get("youtube_channel_id", "")
+        config.YOUTUBE_STREAM_KEY = settings.get("youtube_stream_key", "")
+
+        config.KICK_USERNAME = settings.get("kick_username", "")
+        config.KICK_STREAM_KEY = settings.get("kick_stream_key", "")
+
+        # Save settings to file for persistence
+        save_settings(settings)
+
+        # Recreate OBS controller with new settings
+        if self.obs.connected:
+            self.obs.disconnect()
+            self.obs_status_label.config(text="● Disconnected", foreground="red")
+            self.connect_obs_btn.config(text="Connect to OBS")
+
+        self.obs = OBSController(config.OBS_HOST, config.OBS_PORT, config.OBS_PASSWORD)
+
+        # Reinitialize platform APIs to pick up new credentials
+        PlatformRegistry._instances.clear()
+
+        # Refresh platform status indicators
+        self._check_platform_configs()
 
 
 if __name__ == "__main__":
